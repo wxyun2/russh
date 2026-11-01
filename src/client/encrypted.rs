@@ -35,6 +35,15 @@ use crate::{
     MethodSet, Sig,
 };
 
+fn validate_global_failure_payload(payload: &[u8], pending_keepalive: bool) -> Result<(), Error> {
+    // Some legacy bastions duplicate SSH_MSG_REQUEST_FAILURE in keepalive replies.
+    // Failure semantics are unchanged; all other trailing data remains invalid.
+    if pending_keepalive && payload == [msg::REQUEST_FAILURE] {
+        return Ok(());
+    }
+    ensure_end(&payload)
+}
+
 fn certificate_algorithm_name(cert: &Certificate, hash_alg: Option<HashAlg>) -> String {
     match (cert.algorithm(), hash_alg) {
         (Algorithm::Rsa { .. }, Some(HashAlg::Sha256)) => {
@@ -966,7 +975,13 @@ impl Session {
             }
             Some((&msg::REQUEST_FAILURE, r)) => {
                 trace!("global request failure");
-                map_err!(ensure_end(&r))?;
+                map_err!(validate_global_failure_payload(
+                    &r,
+                    matches!(
+                        self.open_global_requests.front(),
+                        Some(GlobalRequestResponse::Keepalive)
+                    ),
+                ))?;
                 match self.open_global_requests.pop_front() {
                     Some(GlobalRequestResponse::Keepalive) => {
                         // ignore keepalives
@@ -1055,6 +1070,25 @@ mod tests {
     use crate::kex::{KEXES, NONE};
     use crate::session::Exchange;
     use crate::{CryptoVec, MethodKind};
+
+    #[test]
+    fn global_failure_payload_accepts_only_recorded_keepalive_quirk() {
+        for (pending_keepalive, payload, accepted) in [
+            (true, &[][..], true),
+            (false, &[][..], true),
+            (true, &[msg::REQUEST_FAILURE][..], true),
+            (false, &[msg::REQUEST_FAILURE][..], false),
+            (true, &[0][..], false),
+            (true, &[1][..], false),
+            (true, &[msg::REQUEST_FAILURE, msg::REQUEST_FAILURE][..], false),
+        ] {
+            assert_eq!(
+                validate_global_failure_payload(payload, pending_keepalive).is_ok(),
+                accepted,
+                "pending_keepalive={pending_keepalive}, payload={payload:?}",
+            );
+        }
+    }
 
     fn test_encrypted() -> Encrypted {
         Encrypted {

@@ -90,6 +90,20 @@ For RSA certificates the wire algorithm must be:
 
 Keep these patches when updating russh:
 
+### Duplicated Global Failure Byte in Bastion Keepalives
+
+- `src/client/encrypted.rs`
+  - Some bastions answer `keepalive@openssh.com` with the two-byte payload
+    `52 52` instead of the one-byte `SSH_MSG_REQUEST_FAILURE` required by
+    RFC 4254 section 4. Strict trailing-data validation disconnects an otherwise
+    authenticated interactive session on the first keepalive response.
+  - Accept exactly one duplicated `SSH_MSG_REQUEST_FAILURE` byte only while
+    the oldest pending global request is a keepalive. Keep all other payloads
+    and request kinds subject to the existing strict validation.
+  - Preserve the focused regression cases for empty standard replies, the
+    observed keepalive reply, other trailing bytes, repeated extra bytes, and
+    the same malformed reply outside a keepalive.
+
 ### RSA SHA-2 Certificates
 
 - `src/client/encrypted.rs`
